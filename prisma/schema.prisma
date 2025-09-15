@@ -1,0 +1,49 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model employees {
+  id           Int     @id @default(autoincrement())
+  name         String
+  document     String  @unique
+  base_salary  Decimal @db.Decimal(10, 2) // <- trocado de @db.Numeric
+  dependents   Int     @default(0)
+  union_member Boolean @default(false)
+
+  entries  payroll_entries[]
+  payrolls payrolls[]
+}
+
+model payroll_entries {
+  id             Int     @id @default(autoincrement())
+  employee_id    Int
+  period         String  @db.VarChar(7)
+  overtime_hours Decimal @default(0) @db.Decimal(10, 2) // <- trocado
+  bonus          Decimal @default(0) @db.Decimal(10, 2) // <- trocado
+  discounts      Decimal @default(0) @db.Decimal(10, 2) // <- trocado
+
+  employee employees @relation(fields: [employee_id], references: [id])
+
+  @@unique([employee_id, period], name: "uk_entry_emp_period")
+  @@index([period])
+}
+
+model payrolls {
+  id           Int     @id @default(autoincrement())
+  employee_id  Int
+  period       String  @db.VarChar(7)
+  gross_salary Decimal @db.Decimal(10, 2) // <- trocado
+  inss         Decimal @db.Decimal(10, 2) // <- trocado
+  income_tax   Decimal @db.Decimal(10, 2) // <- trocado
+  net_salary   Decimal @db.Decimal(10, 2) // <- trocado
+
+  employee employees @relation(fields: [employee_id], references: [id])
+
+  @@unique([employee_id, period], name: "uk_payroll_emp_period")
+  @@index([period])
+}
