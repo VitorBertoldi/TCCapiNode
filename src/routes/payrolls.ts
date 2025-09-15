@@ -4,12 +4,10 @@ import { computePayroll } from '../services/payrollCalculator';
 
 export const payrolls = Router();
 
-// processa todos os lançamentos do período
 payrolls.post('/process', async (req, res) => {
   const period = (req.query.period as string) || req.body?.period;
   if (!period) return res.status(400).json({ error: "Missing 'period' (YYYY-MM)" });
 
-  // Busca entries + empregado
   const entries = await prisma.payroll_entries.findMany({
     where: { period },
     include: { employee: true },
@@ -20,13 +18,12 @@ payrolls.post('/process', async (req, res) => {
   const results: any[] = [];
   const chunkSize = 200;
 
-  // divide em pedaços de até 200 registros
   for (let i = 0; i < entries.length; i += chunkSize) {
     const chunk = entries.slice(i, i + chunkSize);
 
-    // cada chunk roda numa transação própria com timeout
-    await prisma.$transaction(async (tx) => {
-      for (const inRow of chunk) {
+    // processa cada registro em paralelo dentro do chunk
+    const savedList = await Promise.all(
+      chunk.map(async (inRow) => {
         const e = inRow.employee!;
         const r = computePayroll({
           baseSalary: e.base_salary,
@@ -36,7 +33,7 @@ payrolls.post('/process', async (req, res) => {
           discounts: inRow.discounts,
         });
 
-        const saved = await tx.payrolls.upsert({
+        const saved = await prisma.payrolls.upsert({
           where: { uk_payroll_emp_period: { employee_id: e.id, period } },
           update: {
             gross_salary: r.gross,
@@ -54,7 +51,7 @@ payrolls.post('/process', async (req, res) => {
           },
         });
 
-        results.push({
+        return {
           id: saved.id,
           employeeId: e.id,
           period: saved.period,
@@ -62,20 +59,22 @@ payrolls.post('/process', async (req, res) => {
           inss: saved.inss,
           incomeTax: saved.income_tax,
           netSalary: saved.net_salary,
-        });
-      }
-    }, { timeout: 20000 }); // ✅ 20 segundos para cada batch
+        };
+      })
+    );
+
+    results.push(...savedList);
   }
 
   res.json(results);
 });
 
-// consulta resultados por período
 payrolls.get('/period/:p', async (req, res) => {
   const list = await prisma.payrolls.findMany({
     where: { period: req.params.p },
     take: 1000,
   });
+
   res.json(
     list.map((p) => ({
       id: p.id,
