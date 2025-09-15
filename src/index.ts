@@ -13,7 +13,8 @@ app.use('/employees', employees);
 app.use('/payroll-entries', payrollEntries);
 app.use('/payrolls', payrolls);
 
-const port = process.env.PORT ? Number(process.env.PORT) : 3000;
-app.listen(port, '0.0.0.0', () => {
-  console.log(`API up on http://0.0.0.0:${port}`);
+const PORT = Number(process.env.PORT) || 8080;
+app.listen(PORT, () => {
+  console.log(`API up on http://0.0.0.0:${PORT}`);
 });
+
