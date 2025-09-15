@@ -9,7 +9,7 @@ payrolls.post('/process', async (req, res) => {
   const period = (req.query.period as string) || req.body?.period;
   if (!period) return res.status(400).json({ error: "Missing 'period' (YYYY-MM)" });
 
-  // Busca entries + empregado (JOIN via duas queries)
+  // Busca entries + empregado
   const entries = await prisma.payroll_entries.findMany({
     where: { period },
     include: { employee: true },
@@ -18,57 +18,73 @@ payrolls.post('/process', async (req, res) => {
   if (entries.length === 0) return res.status(204).send();
 
   const results: any[] = [];
-  // transação para upserts consistentes
-  await prisma.$transaction(async (tx) => {
-    for (const inRow of entries) {
-      const e = inRow.employee!;
-      const r = computePayroll({
-        baseSalary: e.base_salary,
-        dependents: e.dependents,
-        overtimeHours: inRow.overtime_hours,
-        bonus: inRow.bonus,
-        discounts: inRow.discounts
-      });
+  const chunkSize = 200;
 
-      const saved = await tx.payrolls.upsert({
-        where: { uk_payroll_emp_period: { employee_id: e.id, period } },
-        update: {
-          gross_salary: r.gross, inss: r.inss, income_tax: r.irrf, net_salary: r.net
-        },
-        create: {
-          employee_id: e.id, period,
-          gross_salary: r.gross, inss: r.inss, income_tax: r.irrf, net_salary: r.net
-        }
-      });
+  // divide em pedaços de até 200 registros
+  for (let i = 0; i < entries.length; i += chunkSize) {
+    const chunk = entries.slice(i, i + chunkSize);
 
-      results.push({
-        id: saved.id,
-        employeeId: e.id,
-        period: saved.period,
-        grossSalary: saved.gross_salary,
-        inss: saved.inss,
-        incomeTax: saved.income_tax,
-        netSalary: saved.net_salary
-      });
-    }
-  });
+    // cada chunk roda numa transação própria com timeout
+    await prisma.$transaction(async (tx) => {
+      for (const inRow of chunk) {
+        const e = inRow.employee!;
+        const r = computePayroll({
+          baseSalary: e.base_salary,
+          dependents: e.dependents,
+          overtimeHours: inRow.overtime_hours,
+          bonus: inRow.bonus,
+          discounts: inRow.discounts,
+        });
+
+        const saved = await tx.payrolls.upsert({
+          where: { uk_payroll_emp_period: { employee_id: e.id, period } },
+          update: {
+            gross_salary: r.gross,
+            inss: r.inss,
+            income_tax: r.irrf,
+            net_salary: r.net,
+          },
+          create: {
+            employee_id: e.id,
+            period,
+            gross_salary: r.gross,
+            inss: r.inss,
+            income_tax: r.irrf,
+            net_salary: r.net,
+          },
+        });
+
+        results.push({
+          id: saved.id,
+          employeeId: e.id,
+          period: saved.period,
+          grossSalary: saved.gross_salary,
+          inss: saved.inss,
+          incomeTax: saved.income_tax,
+          netSalary: saved.net_salary,
+        });
+      }
+    }, { timeout: 20000 }); // ✅ 20 segundos para cada batch
+  }
 
   res.json(results);
 });
 
+// consulta resultados por período
 payrolls.get('/period/:p', async (req, res) => {
   const list = await prisma.payrolls.findMany({
     where: { period: req.params.p },
-    take: 1000
+    take: 1000,
   });
-  // responde formato amigável
-  res.json(list.map(p => ({
-    id: p.id,
-    employeeId: p.employee_id,
-    period: p.period,
-    grossSalary: p.gross_salary,
-    inss: p.inss,
-    incomeTax: p.income_tax,
-    netSalary: p.net_salary
-  })));
+  res.json(
+    list.map((p) => ({
+      id: p.id,
+      employeeId: p.employee_id,
+      period: p.period,
+      grossSalary: p.gross_salary,
+      inss: p.inss,
+      incomeTax: p.income_tax,
+      netSalary: p.net_salary,
+    }))
+  );
 });
